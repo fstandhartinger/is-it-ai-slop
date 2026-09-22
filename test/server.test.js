@@ -17,3 +17,11 @@ test('moves focus and the viewport to a completed result', () => {
   assert.match(html, /result\.scrollIntoView\(/);
   assert.match(html, /button\.textContent='Check text'/);
 });
+
+test('offers a keyboard-safe sample for first-time visitors', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(html, /<button class="sample" id="sample" type="button">Try a sample<\/button>/);
+  assert.match(html, /querySelector\('#sample'\)\.addEventListener\('click'/);
+  assert.match(html, /text\.dispatchEvent\(new Event\('input'\)\)/);
+  assert.match(html, /text\.focus\(\)/);
+});
