@@ -6,6 +6,7 @@ const PORT = Number(process.env.PORT || 3000);
 const API_KEY = process.env.TYPESAFE_API_KEY || '';
 const API_URL = process.env.TYPESAFE_ENDPOINT || 'https://api.typesafe.ai/v1/systemone';
 const MODEL = process.env.TYPESAFE_MODEL || 'jev-latest';
+const UMAMI_API_KEY = process.env.UMAMI_API_KEY || '';
 const MAX_CHARS = 5000;
 const PRICE_PER_INPUT_TOKEN = 0.042 / 1_000_000;
 const DAILY_BUDGET_USD = Number(process.env.DAILY_BUDGET_USD || 2);
@@ -13,11 +14,14 @@ const CALL_RESERVE_USD = 0.00025;
 const IP_WINDOW_MS = 15 * 60 * 1000;
 const IP_CALL_LIMIT = Number(process.env.IP_CALL_LIMIT || 10);
 const indexHtml = fs.readFileSync(path.join(__dirname, 'index.html'));
+const privacyHtml = fs.readFileSync(path.join(__dirname, 'privacy.html'));
 
 let day = utcDay();
 let spentToday = 0;
 let reservedToday = 0;
 const ipCalls = new Map();
+const visitorCache = { value: null, expiresAt: 0 };
+let visitorRequest = null;
 
 function utcDay() { return new Date().toISOString().slice(0, 10); }
 function resetDayIfNeeded() {
@@ -41,6 +45,34 @@ function json(res, status, body) {
     'cache-control': 'no-store', 'x-content-type-options': 'nosniff'
   });
   res.end(data);
+}
+async function totalVisitors() {
+  if (!UMAMI_API_KEY) return null;
+  const now = Date.now();
+  if (visitorCache.expiresAt > now) return visitorCache.value;
+  if (!visitorRequest) {
+    visitorRequest = (async () => {
+      try {
+        const url = new URL('https://bh-analytics.app.mintapis.com/api/websites/76557796-8d7a-457e-9941-31c69dbe8cf3/stats');
+        url.searchParams.set('startAt', '0');
+        url.searchParams.set('endAt', String(now));
+        const response = await fetch(url, { headers: { authorization: `Bearer ${UMAMI_API_KEY}` }, signal: AbortSignal.timeout(2500) });
+        if (!response.ok) throw new Error('umami_unavailable');
+        const data = await response.json();
+        if (!Number.isSafeInteger(data.visitors) || data.visitors < 0) throw new Error('invalid_umami_response');
+        visitorCache.value = data.visitors;
+        visitorCache.expiresAt = now + 5 * 60_000;
+        return visitorCache.value;
+      } catch {
+        visitorCache.value = null;
+        visitorCache.expiresAt = now + 60_000;
+        return null;
+      } finally {
+        visitorRequest = null;
+      }
+    })();
+  }
+  return visitorRequest;
 }
 function readJson(req) {
   return new Promise((resolve, reject) => {
@@ -92,10 +124,18 @@ async function askJev(text) {
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': indexHtml.length, 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" });
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': indexHtml.length, 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://bh-analytics.app.mintapis.com; connect-src 'self' https://bh-analytics.app.mintapis.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" });
     return res.end(indexHtml);
   }
+  if (req.method === 'GET' && req.url === '/privacy.html') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': privacyHtml.length, 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://bh-analytics.app.mintapis.com; connect-src 'self' https://bh-analytics.app.mintapis.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" });
+    return res.end(privacyHtml);
+  }
   if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true });
+  if (req.method === 'GET' && req.url === '/api/visits') {
+    const visitors = await totalVisitors();
+    return json(res, 200, { visitors });
+  }
   if (req.method !== 'POST' || req.url !== '/api/answer') return json(res, 404, { error: 'Not found.' });
   resetDayIfNeeded();
   if (!API_KEY) return json(res, 503, { error: 'Jev is taking a short break. Please try again later.' });
