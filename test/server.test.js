@@ -46,3 +46,8 @@ test('serves analytics pages under a CSP that permits only the self-hosted Umami
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
 });
+
+test('Docker image includes the privacy page read at server startup', () => {
+  const dockerfile = fs.readFileSync(path.join(__dirname, '..', 'Dockerfile'), 'utf8');
+  assert.match(dockerfile, /COPY package\.json server\.js index\.html privacy\.html \.\//);
+});
